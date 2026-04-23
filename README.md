@@ -1,30 +1,30 @@
 # Local AI Server
 
-Android app chạy LLM inference server trực tiếp trên thiết bị. Cung cấp API tương thích OpenAI, cho phép mọi ứng dụng AI client kết nối và sử dụng model AI chạy hoàn toàn offline.
+Android 应用直接在设备上运行 LLM 推理服务器。提供兼容 OpenAI 的 API,允许任何 AI 客户端应用连接并使用完全离线运行的 AI 模型。
 
-## Tính năng
+## 功能
 
-- **Dual-engine**: Hỗ trợ MediaPipe (`.task`) và LiteRT GenAI (`.litertlm`)
-- **OpenAI-compatible API**: `/v1/chat/completions` với streaming (SSE)
-- **12+ models**: Gemma 2/3/4, Qwen 2.5, DeepSeek R1, SmolLM, TinyLlama
-- **Chat UI**: Giao diện chat tích hợp với streaming real-time
-- **Multi-turn**: Hỗ trợ hội thoại nhiều lượt với system prompt
-- **Thread-safe**: Hàng đợi inference đảm bảo xử lý đa luồng an toàn
-- **CORS**: Cho phép browser-based clients truy cập API
-- **Background service**: Server chạy nền với notification
+- **双引擎**: 支持 MediaPipe (`.task`) 和 LiteRT GenAI (`.litertlm`)
+- **兼容 OpenAI 的 API**: `/v1/chat/completions` 支持流式传输 (SSE)
+- **12+ 模型**: Gemma 2/3/4, Qwen 2.5, DeepSeek R1, SmolLM, TinyLlama
+- **聊天 UI**: 集成了实时流式传输的聊天界面
+- **多轮对话**: 支持带系统提示的多轮对话
+- **线程安全**: 推理队列确保多线程处理的安全性
+- **CORS**: 允许基于浏览器的客户端访问 API
+- **后台服务**: 服务器以后台服务运行并显示通知
 
-## Cài đặt
+## 安装
 
-1. Cài file APK trên thiết bị Android (ARM64, Android 8+)
-2. Mở app, tải model từ tab **Models**
-3. Chọn model và nhấn **Load Model**
-4. Nhấn **Start** để khởi động server
+1. 在 Android 设备上安装 APK 文件 (ARM64, Android 8+)
+2. 打开应用,从 **模型** 标签页下载模型
+3. 选择模型并点击 **加载模型**
+4. 点击 **启动** 按钮启动服务器
 
-## API Endpoints
+## API 端点
 
-Server mặc định chạy tại `http://127.0.0.1:8765`
+服务器默认运行在 `http://127.0.0.1:8765`
 
-### OpenAI-compatible (khuyên dùng)
+### OpenAI 兼容接口 (主要使用)
 
 #### POST /v1/chat/completions
 
@@ -34,14 +34,14 @@ curl http://127.0.0.1:8765/v1/chat/completions \
   -d '{
     "messages": [
       {"role": "system", "content": "You are a helpful assistant."},
-      {"role": "user", "content": "Xin chao!"}
+      {"role": "user", "content": "你好!"}
     ],
     "temperature": 0.7,
     "stream": false
   }'
 ```
 
-**Response:**
+**响应:**
 ```json
 {
   "id": "chatcmpl-abc123",
@@ -49,14 +49,14 @@ curl http://127.0.0.1:8765/v1/chat/completions \
   "model": "Gemma 3 1B (Q8)",
   "choices": [{
     "index": 0,
-    "message": {"role": "assistant", "content": "Xin chao! Toi co the giup gi cho ban?"},
+    "message": {"role": "assistant", "content": "你好! 我能帮你什么吗?"},
     "finish_reason": "stop"
   }],
   "usage": {"prompt_tokens": 12, "completion_tokens": 15, "total_tokens": 27}
 }
 ```
 
-#### Streaming (SSE)
+#### 流式传输 (SSE)
 
 ```bash
 curl http://127.0.0.1:8765/v1/chat/completions \
@@ -64,7 +64,7 @@ curl http://127.0.0.1:8765/v1/chat/completions \
   -d '{"messages": [{"role": "user", "content": "Hello"}], "stream": true}'
 ```
 
-Response là Server-Sent Events:
+响应是服务器发送的事件:
 ```
 data: {"id":"chatcmpl-abc","choices":[{"delta":{"role":"assistant"},"index":0}]}
 
@@ -83,79 +83,79 @@ data: [DONE]
 curl http://127.0.0.1:8765/v1/models
 ```
 
-### Media Endpoints (Multimodal - yêu cầu Gemma 4)
+### 媒体端点 (多模态 - 需要 Gemma 4)
 
-Các endpoint này cho phép **app khác** xử lý audio/image/video thông qua HTTP. Cần load **Gemma 4 E2B** hoặc **E4B** (.litertlm) trước.
+这些端点允许**其他应用**通过 HTTP 处理音频/图像/视频。需要先加载 **Gemma 4 E2B** 或 **E4B** (.litertlm)。
 
 #### POST /v1/audio/transcriptions
 
-Chuyển audio thành text (tương thích OpenAI Whisper API).
+将音频转换为文本 (兼容 OpenAI Whisper API)。
 
 ```bash
 curl -X POST http://127.0.0.1:8765/v1/audio/transcriptions \
   -F "file=@audio.wav" \
-  -F "language=vi" \
+  -F "language=zh" \
   -F "response_format=json"
 ```
 
-**Response:**
+**响应:**
 ```json
-{"text": "Xin chào, tôi đang thử nghiệm..."}
+{"text": "你好,我正在测试..."}
 ```
 
-**Form fields:**
-- `file` (required): audio file (wav, mp3, m4a, flac...)
-- `language` (optional): ngôn ngữ, ví dụ `vi`, `en`
-- `prompt` (optional): context guidance
-- `response_format` (optional): `json` | `text` | `verbose_json`
+**表单字段:**
+- `file` (必需): 音频文件 (wav, mp3, m4a, flac...)
+- `language` (可选): 语言,例如 `zh`, `en`
+- `prompt` (可选): 上下文指导
+- `response_format` (可选): `json` | `text` | `verbose_json`
 
 #### POST /v1/audio/translations
 
-Chuyển audio thành text tiếng Anh (dịch từ bất kỳ ngôn ngữ nào).
+将音频转换为英文文本 (从任何语言翻译)。
 
 ```bash
 curl -X POST http://127.0.0.1:8765/v1/audio/translations \
-  -F "file=@vietnamese.wav"
+  -F "file=@chinese.wav"
 ```
 
 #### POST /v1/images/describe
 
-Mô tả ảnh.
+描述图像。
 
 ```bash
 curl -X POST http://127.0.0.1:8765/v1/images/describe \
   -F "file=@photo.jpg" \
-  -F "prompt=Có bao nhiêu người trong ảnh?"
+  -F "prompt=图片里有几个人?"
 ```
 
-**Response:**
+**响应:**
 ```json
 {
-  "description": "Trong ảnh có 3 người đang...",
+  "description": "图片中有 3 个人正在...",
   "model": "Gemma 4 E2B",
   "processing_time_ms": 4532
 }
 ```
 
-**Form fields:**
-- `file` hoặc `image` (required): image file (jpg, png, webp...)
-- `prompt` (optional): custom prompt (mặc định: mô tả chi tiết)
+**表单字段:**
+- `file` 或 `image` (必需): 图像文件 (jpg, png, webp...)
+- `prompt` (可选): 自定义提示词 (默认: 详细描述)
 
 #### POST /v1/video/analyze
 
-Phân tích video bằng cách trích xuất các khung hình đại diện.
+通过提取代表性帧来分析视频。
 
 ```bash
 curl -X POST http://127.0.0.1:8765/v1/video/analyze \
   -F "file=@video.mp4" \
   -F "frame_count=8" \
-  -F "prompt=Tóm tắt sự việc trong video"
+  -F "prompt=总结视频中的事件"
 ```
 
-**Response:**
+**响应:**
 ```json
 {
-  "description": "Video quay cảnh...",
+  "description": "视频拍摄了场景...",
   "frames_analyzed": 8,
   "duration_ms": 45000,
   "model": "Gemma 4 E2B",
@@ -163,16 +163,16 @@ curl -X POST http://127.0.0.1:8765/v1/video/analyze \
 }
 ```
 
-**Form fields:**
-- `file` hoặc `video` (required): video file (mp4, 3gp, mov...)
-- `frame_count` (optional): số khung hình trích xuất, 1-16 (mặc định 4)
-- `prompt` (optional): custom prompt
+**表单字段:**
+- `file` 或 `video` (必需): 视频文件 (mp4, 3gp, mov...)
+- `frame_count` (可选): 提取的帧数, 1-16 (默认 4)
+- `prompt` (可选): 自定义提示词
 
-App sẽ trích xuất `frame_count` khung hình đều nhau trong video, resize về tối đa 1024px, rồi gửi cho Gemma 4.
+应用将从视频中均匀提取 `frame_count` 个帧,调整为最大 1024px,然后发送给 Gemma 4。
 
-### Ví dụ gọi từ app khác
+### 从其他应用调用的示例
 
-**Android (Kotlin) - upload audio:**
+**Android (Kotlin) - 上传音频:**
 ```kotlin
 val client = OkHttpClient()
 val audioFile = File(audioPath)
@@ -180,7 +180,7 @@ val body = MultipartBody.Builder()
     .setType(MultipartBody.FORM)
     .addFormDataPart("file", audioFile.name,
         audioFile.asRequestBody("audio/wav".toMediaType()))
-    .addFormDataPart("language", "vi")
+    .addFormDataPart("language", "zh")
     .build()
 val request = Request.Builder()
     .url("http://127.0.0.1:8765/v1/audio/transcriptions")
@@ -191,31 +191,31 @@ val json = JSONObject(response.body!!.string())
 val text = json.getString("text")
 ```
 
-**Python - upload image:**
+**Python - 上传图像:**
 ```python
 import requests
 with open('photo.jpg', 'rb') as f:
     r = requests.post(
         'http://127.0.0.1:8765/v1/images/describe',
         files={'file': f},
-        data={'prompt': 'What is in this image?'}
+        data={'prompt': '这张图片里是什么?'}
     )
 print(r.json()['description'])
 ```
 
-**JavaScript (fetch) - upload video:**
+**JavaScript (fetch) - 上传视频:**
 ```javascript
 const fd = new FormData();
 fd.append('file', videoBlob, 'video.mp4');
 fd.append('frame_count', '6');
 const r = await fetch('http://127.0.0.1:8765/v1/video/analyze', {
-  method: 'POST', body: fd
+    method: 'POST', body: fd
 });
 const data = await r.json();
 console.log(data.description);
 ```
 
-### Legacy API
+### 传统 API
 
 #### GET /api/health
 
@@ -248,13 +248,13 @@ curl http://127.0.0.1:8765/api/chat \
 curl http://127.0.0.1:8765/api/models
 ```
 
-## Tích hợp với các ứng dụng khác
+## 与其他应用集成
 
 ### Open WebUI
 
-1. Settings > Connections > OpenAI API
-2. Base URL: `http://127.0.0.1:8765/v1`
-3. API Key: bất kỳ (server không yêu cầu auth)
+1. 设置 > 连接 > OpenAI API
+2. 基础 URL: `http://127.0.0.1:8765/v1`
+3. API Key: 任意 (服务器不需要身份验证)
 
 ### Continue.dev (VS Code)
 
@@ -270,10 +270,10 @@ curl http://127.0.0.1:8765/api/models
 }
 ```
 
-### LM Studio / Any OpenAI Client
+### LM Studio / 任何 OpenAI 客户端
 
-Base URL: `http://127.0.0.1:8765/v1`
-API Key: bất kỳ giá trị
+基础 URL: `http://127.0.0.1:8765/v1`
+API Key: 任意值
 
 ### Python (openai SDK)
 
@@ -303,18 +303,18 @@ for chunk in response:
 
 ```javascript
 const response = await fetch('http://127.0.0.1:8765/v1/chat/completions', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({
-    messages: [{ role: 'user', content: 'Hello!' }],
-    stream: false
-  })
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+        messages: [{ role: 'user', content: 'Hello!' }],
+        stream: false
+    })
 });
 const data = await response.json();
 console.log(data.choices[0].message.content);
 ```
 
-### Kotlin / Android App
+### Kotlin / Android 应用
 
 ```kotlin
 val url = URL("http://127.0.0.1:8765/v1/chat/completions")
@@ -329,51 +329,51 @@ conn.outputStream.write(body.toByteArray())
 val response = conn.inputStream.bufferedReader().readText()
 ```
 
-## Models có sẵn
+## 可用模型
 
-| Model | Size | RAM | Ghi chú |
-|-------|------|-----|---------|
-| Gemma 4 E2B | 2.4 GB | ~3 GB | Gemma 4 mới nhất, 2B params |
-| Gemma 4 E4B | 3.5 GB | ~4.5 GB | Gemma 4 mạnh nhất, 4B params |
-| Gemma 3 270M | 290 MB | ~0.5 GB | Siêu nhẹ, tốc độ cao |
-| Gemma 3 1B (Q4) | 529 MB | ~1 GB | Nhẹ, tỷ lệ chất lượng/kích thước tốt |
-| Gemma 3 1B (Q8) | 1 GB | ~1.5 GB | Cân bằng tốt, chất lượng cao |
-| Qwen 2.5 0.5B | 521 MB | ~0.8 GB | Đa ngôn ngữ, Apache 2.0 |
-| Qwen 2.5 1.5B | 1.5 GB | ~2 GB | Đa ngôn ngữ xuất sắc |
-| DeepSeek R1 1.5B | 1.8 GB | ~2 GB | Lý luận logic tốt |
-| SmolLM 135M | 159 MB | ~0.3 GB | Siêu nhỏ, tải nhanh |
-| TinyLlama 1.1B | 1.1 GB | ~1.5 GB | Nhẹ, chat tốt |
-| Gemma 2 2B (Q8) | 2.6 GB | ~3 GB | Ổn định, đã kiểm chứng |
+| 模型 | 大小 | RAM | 备注 |
+|-------|------|-----|------|
+| Gemma 4 E2B | 2.4 GB | ~3 GB | 最新的 Gemma 4, 2B 参数 |
+| Gemma 4 E4B | 3.5 GB | ~4.5 GB | 最强的 Gemma 4, 4B 参数 |
+| Gemma 3 270M | 290 MB | ~0.5 GB | 超轻量, 高速 |
+| Gemma 3 1B (Q4) | 529 MB | ~1 GB | 轻量, 质量/大小比例良好 |
+| Gemma 3 1B (Q8) | 1 GB | ~1.5 GB | 平衡良好, 质量高 |
+| Qwen 2.5 0.5B | 521 MB | ~0.8 GB | 多语言, Apache 2.0 |
+| Qwen 2.5 1.5B | 1.5 GB | ~2 GB | 出色的多语言支持 |
+| DeepSeek R1 1.5B | 1.8 GB | ~2 GB | 良好的逻辑推理 |
+| SmolLM 135M | 159 MB | ~0.3 GB | 超小, 快速加载 |
+| TinyLlama 1.1B | 1.1 GB | ~1.5 GB | 轻量, 聊天良好 |
+| Gemma 2 2B (Q8) | 2.6 GB | ~3 GB | 稳定, 已验证 |
 
-## Concurrency & Performance
+## 并发与性能
 
-- **Thread-safe inference**: Semaphore đảm bảo chỉ 1 inference chạy tại một thời điểm
-- **Request queue**: Các request xếp hàng FIFO, timeout 60s
-- **Port fallback**: Tự động thử port 8765 → 8766 → 8767 → 8780
-- **Streaming**: SSE cho phép nhận response từng token thay vì đợi toàn bộ
-- **Performance tracking**: Tokens/sec và processing time hiển thị trên UI
+- **线程安全推理**: 信号量确保同一时间只运行 1 个推理
+- **请求队列**: 请求按 FIFO 排列, 超时 60 秒
+- **端口回退**: 自动尝试端口 8765 → 8766 → 8767 → 8780
+- **流式传输**: SSE 允许逐个接收 token 响应,而无需等待全部
+- **性能跟踪**: 在 UI 上显示令牌/秒和处理时间
 
-## Yêu cầu hệ thống
+## 系统要求
 
 - Android 8.0+ (API 26)
 - ARM64 (arm64-v8a)
-- RAM tối thiểu: tùy model (0.3 GB - 4.5 GB)
-- Bộ nhớ trống: tùy model download
+- 最大 RAM: 根据模型 (0.3 GB - 4.5 GB)
+- 空闲内存: 根据下载的模型
 
-## Cấu trúc dự án
+## 项目结构
 
 ```
 app/src/main/java/com/localai/server/
-├── LocalAIApp.kt          # Application singleton
-├── MainActivity.kt        # Entry point
+├── LocalAIApp.kt          # 应用单例
+├── MainActivity.kt        # 入口点
 ├── engine/
-│   └── LlmEngine.kt      # Dual-engine inference, streaming, concurrency
+│   └── LlmEngine.kt      # 双引擎推理、流式传输、并发
 ├── service/
-│   └── AiServerService.kt # HTTP server, OpenAI API, SSE
+│   └── AiServerService.kt # HTTP 服务器、OpenAI API、SSE
 └── ui/
-    └── ServerScreen.kt    # Compose UI, chat, settings
+    └── ServerScreen.kt    # Compose UI、聊天、设置
 ```
 
-## License
+## 许可证
 
 MIT

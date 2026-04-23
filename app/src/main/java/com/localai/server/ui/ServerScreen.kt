@@ -36,8 +36,10 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.localai.server.LocalAIApp
+import com.localai.server.MainActivity
 import com.localai.server.engine.LlmEngine
 import com.localai.server.service.AiServerService
+import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -91,6 +93,7 @@ data class ServerUiState(
     val autoStartOnOpen: Boolean = false,
     val autoStartOnBoot: Boolean = false,
     val keepAwake: Boolean = true,
+    val preferredPort: Int = 8765,
     // Performance
     val lastProcessingMs: Long = 0,
     val tokensPerSecond: Float = 0f,
@@ -122,6 +125,7 @@ class ServerViewModel(app: Application) : AndroidViewModel(app) {
             autoStartOnOpen = settings.autoStartOnOpen,
             autoStartOnBoot = settings.autoStartOnBoot,
             keepAwake = settings.keepAwake,
+            preferredPort = settings.preferredPort,
             selectedModelPath = settings.lastModelPath
         ) }
         engine.maxTokens = settings.maxTokens
@@ -141,14 +145,14 @@ class ServerViewModel(app: Application) : AndroidViewModel(app) {
     private suspend fun autoStart() {
         val path = settings.lastModelPath
         if (path.isBlank() || engine.isLoaded) return
-        _uiState.update { it.copy(isModelLoading = true, message = "Đang tự tải mô hình...") }
+        _uiState.update { it.copy(isModelLoading = true, message = "正在自动加载模型...") }
         engine.loadModel(path)
             .onSuccess {
-                _uiState.update { it.copy(isModelLoading = false, message = "Mô hình sẵn sàng! Đang khởi động máy chủ...") }
+                _uiState.update { it.copy(isModelLoading = false, message = "模型已就绪! 正在启动服务器...") }
                 AiServerService.start(getApplication())
             }
             .onFailure { e ->
-                _uiState.update { it.copy(isModelLoading = false, message = "Tự tải thất bại: ${e.message}") }
+                _uiState.update { it.copy(isModelLoading = false, message = "自动加载失败: ${e.message}") }
             }
     }
 
@@ -169,7 +173,7 @@ class ServerViewModel(app: Application) : AndroidViewModel(app) {
     fun loadModel() {
         val path = _uiState.value.selectedModelPath
         if (path.isBlank()) return
-        _uiState.update { it.copy(isModelLoading = true, message = "Đang tải mô hình...") }
+        _uiState.update { it.copy(isModelLoading = true, message = "正在加载模型...") }
         viewModelScope.launch {
             engine.maxTokens = _uiState.value.maxTokens
             engine.defaultTemperature = _uiState.value.temperature
@@ -179,15 +183,15 @@ class ServerViewModel(app: Application) : AndroidViewModel(app) {
             engine.loadModel(path)
                 .onSuccess {
                     settings.lastModelPath = path
-                    _uiState.update { it.copy(isModelLoading = false, message = "Mô hình sẵn sàng!") }
+                    _uiState.update { it.copy(isModelLoading = false, message = "模型已就绪!") }
                 }
-                .onFailure { e -> _uiState.update { it.copy(isModelLoading = false, message = "Lỗi: ${e.message}") } }
+                .onFailure { e -> _uiState.update { it.copy(isModelLoading = false, message = "错误: ${e.message}") } }
         }
     }
 
     fun unloadModel() {
         engine.unload()
-        _uiState.update { it.copy(message = "Đã gỡ mô hình") }
+        _uiState.update { it.copy(message = "已卸载模型") }
     }
 
     fun downloadModel(model: LlmEngine.DownloadableModel) {
@@ -197,23 +201,32 @@ class ServerViewModel(app: Application) : AndroidViewModel(app) {
             engine.downloadModel(model) { dl, total, progress ->
                 _uiState.update { it.copy(downloadProgress = progress, downloadedMb = dl / (1024*1024), downloadTotalMb = total / (1024*1024)) }
             }.onSuccess { path ->
-                _uiState.update { it.copy(downloadingId = null, selectedModelPath = path, message = "Đã tải ${model.displayName}") }
+                _uiState.update { it.copy(downloadingId = null, selectedModelPath = path, message = "已下载 ${model.displayName}") }
                 scanModels()
             }.onFailure { e ->
-                _uiState.update { it.copy(downloadingId = null, message = "Tải thất bại: ${e.message}") }
+                _uiState.update { it.copy(downloadingId = null, message = "下载失败: ${e.message}") }
             }
         }
     }
 
     fun cancelDownload() {
         engine.cancelDownload()
-        _uiState.update { it.copy(downloadingId = null, message = "Đã hủy") }
+        _uiState.update { it.copy(downloadingId = null, message = "已取消") }
     }
 
     fun deleteModel(id: String) {
         engine.deleteModel(id)
         scanModels()
-        _uiState.update { it.copy(message = "Đã xóa") }
+        _uiState.update { it.copy(message = "已删除") }
+    }
+
+    fun deleteLocalModel(path: String) {
+        val file = File(path)
+        if (file.exists()) {
+            file.delete()
+            scanModels()
+            _uiState.update { it.copy(message = "已删除") }
+        }
     }
 
     fun refresh() {
@@ -231,8 +244,9 @@ class ServerViewModel(app: Application) : AndroidViewModel(app) {
     fun updateAutoStartOnOpen(v: Boolean) { _uiState.update { it.copy(autoStartOnOpen = v) }; settings.autoStartOnOpen = v }
     fun updateAutoStartOnBoot(v: Boolean) { _uiState.update { it.copy(autoStartOnBoot = v) }; settings.autoStartOnBoot = v }
     fun updateKeepAwake(v: Boolean) { _uiState.update { it.copy(keepAwake = v) }; settings.keepAwake = v }
+    fun updatePreferredPort(v: Int) { _uiState.update { it.copy(preferredPort = v) }; settings.preferredPort = v }
 
-    // ── Chat (text-only, dùng cho test trên app) ──
+    // ── Chat (text-only, 用于在应用上测试) ──
 
     fun sendMessage(userText: String) {
         if (userText.isBlank() || _uiState.value.isGenerating) return
@@ -278,7 +292,7 @@ class ServerViewModel(app: Application) : AndroidViewModel(app) {
                     },
                     onError = { e ->
                         _uiState.update { it.copy(
-                            chatMessages = it.chatMessages + UiChatMessage("assistant", "Lỗi: ${e.message}"),
+                            chatMessages = it.chatMessages + UiChatMessage("assistant", "错误: ${e.message}"),
                             isGenerating = false,
                             streamingContent = ""
                         ) }
@@ -337,16 +351,28 @@ fun ServerScreen(viewModel: ServerViewModel = viewModel()) {
     val layoutSize = rememberLayoutSize()
     val useRail = layoutSize != LayoutSize.COMPACT
 
+    // 权限检查
+    val hasStoragePermission by remember {
+        mutableStateOf(
+            if (context is MainActivity) {
+                context.hasStoragePermission()
+            } else {
+                // 如果无法转换为 MainActivity，检查默认权限
+                android.os.Environment.getExternalStorageState() == android.os.Environment.MEDIA_MOUNTED
+            }
+        )
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text("Local AI Server") },
                 actions = {
                     IconButton(onClick = { viewModel.toggleSettings() }) {
-                        Icon(Icons.Default.Settings, "Cài đặt")
+                        Icon(Icons.Default.Settings, "设置")
                     }
                     IconButton(onClick = { viewModel.refresh() }) {
-                        Icon(Icons.Default.Refresh, "Làm mới")
+                        Icon(Icons.Default.Refresh, "刷新")
                     }
                 }
             )
@@ -358,26 +384,73 @@ fun ServerScreen(viewModel: ServerViewModel = viewModel()) {
                         selected = uiState.activeTab == 0,
                         onClick = { viewModel.setActiveTab(0) },
                         icon = { Icon(Icons.Default.Home, null) },
-                        label = { Text("Máy chủ") }
+                        label = { Text("服务器") }
                     )
                     NavigationBarItem(
                         selected = uiState.activeTab == 1,
                         onClick = { viewModel.setActiveTab(1) },
                         icon = { Icon(Icons.Default.Forum, null) },
-                        label = { Text("Trò chuyện") },
+                        label = { Text("聊天") },
                         enabled = engineStatus == LlmEngine.Status.READY
                     )
                     NavigationBarItem(
                         selected = uiState.activeTab == 2,
                         onClick = { viewModel.setActiveTab(2) },
                         icon = { Icon(Icons.Default.CloudDownload, null) },
-                        label = { Text("Mô hình") }
+                        label = { Text("模型") }
                     )
                 }
             }
         },
         snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { padding ->
+        // 权限提示
+        if (!hasStoragePermission) {
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(padding)
+                    .background(MaterialTheme.colorScheme.errorContainer)
+                    .padding(16.dp)
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            Icons.Default.Warning,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onErrorContainer
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                "需要存储权限",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onErrorContainer
+                            )
+                            Text(
+                                "应用需要访问存储权限才能读取外部模型文件",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onErrorContainer
+                            )
+                        }
+                    }
+                    Button(
+                        onClick = {
+                            if (context is MainActivity) {
+                                context.openStoragePermissionSettings()
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.onErrorContainer
+                        )
+                    ) {
+                        Text("去设置页面授予权限", color = MaterialTheme.colorScheme.errorContainer)
+                    }
+                }
+            }
+        }
+
         Row(Modifier.padding(padding).fillMaxSize()) {
             if (useRail) {
                 NavigationRail {
@@ -386,20 +459,20 @@ fun ServerScreen(viewModel: ServerViewModel = viewModel()) {
                         selected = uiState.activeTab == 0,
                         onClick = { viewModel.setActiveTab(0) },
                         icon = { Icon(Icons.Default.Home, null) },
-                        label = { Text("Máy chủ") }
+                        label = { Text("服务器") }
                     )
                     NavigationRailItem(
                         selected = uiState.activeTab == 1,
                         onClick = { viewModel.setActiveTab(1) },
                         icon = { Icon(Icons.Default.Forum, null) },
-                        label = { Text("Trò chuyện") },
+                        label = { Text("聊天") },
                         enabled = engineStatus == LlmEngine.Status.READY
                     )
                     NavigationRailItem(
                         selected = uiState.activeTab == 2,
                         onClick = { viewModel.setActiveTab(2) },
                         icon = { Icon(Icons.Default.CloudDownload, null) },
-                        label = { Text("Mô hình") }
+                        label = { Text("模型") }
                     )
                 }
             }
@@ -437,18 +510,18 @@ fun SettingsPanel(uiState: ServerUiState, viewModel: ServerViewModel) {
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
     ) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text("Cài đặt", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+            Text("设置", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
 
             HorizontalDivider(Modifier.padding(vertical = 4.dp))
 
             // ── Server Behavior ──
-            Text("Máy chủ", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold,
+            Text("服务器", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.primary)
 
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
-                    Text("Tự khởi động khi mở app", style = MaterialTheme.typography.bodySmall)
-                    Text("Tự tải mô hình và chạy máy chủ", style = MaterialTheme.typography.labelSmall,
+                    Text("打开应用时自动启动", style = MaterialTheme.typography.bodySmall)
+                    Text("自动加载模型并运行服务器", style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 Switch(checked = uiState.autoStartOnOpen, onCheckedChange = { viewModel.updateAutoStartOnOpen(it) })
@@ -456,8 +529,8 @@ fun SettingsPanel(uiState: ServerUiState, viewModel: ServerViewModel) {
 
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
-                    Text("Tự khởi động khi bật máy", style = MaterialTheme.typography.bodySmall)
-                    Text("Máy chủ chạy ngay khi bật điện thoại", style = MaterialTheme.typography.labelSmall,
+                    Text("开机时自动启动", style = MaterialTheme.typography.bodySmall)
+                    Text("开机后立即运行服务器", style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 Switch(checked = uiState.autoStartOnBoot, onCheckedChange = { viewModel.updateAutoStartOnBoot(it) })
@@ -465,24 +538,46 @@ fun SettingsPanel(uiState: ServerUiState, viewModel: ServerViewModel) {
 
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
-                    Text("Giữ CPU hoạt động (WakeLock)", style = MaterialTheme.typography.bodySmall)
-                    Text("Ngăn CPU ngủ khi máy chủ chạy nền", style = MaterialTheme.typography.labelSmall,
+                    Text("保持CPU唤醒", style = MaterialTheme.typography.bodySmall)
+                    Text("防止服务器后台运行时CPU休眠", style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 Switch(checked = uiState.keepAwake, onCheckedChange = { viewModel.updateKeepAwake(it) })
             }
 
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("服务器端口", style = MaterialTheme.typography.bodySmall)
+                    Text("HTTP服务器监听端口 (1-65535)", style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                OutlinedTextField(
+                    value = uiState.preferredPort.toString(),
+                    onValueChange = { text ->
+                        val port = text.toIntOrNull()
+                        if (port != null && port in 1..65535) {
+                            viewModel.updatePreferredPort(port)
+                        }
+                    },
+                    modifier = Modifier.width(100.dp),
+                    singleLine = true,
+                    textStyle = MaterialTheme.typography.bodySmall,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    isError = uiState.preferredPort !in 1..65535
+                )
+            }
+
             HorizontalDivider(Modifier.padding(vertical = 4.dp))
 
             // ── Inference ──
-            Text("Tham số suy luận", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold,
+            Text("推理参数", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.primary)
 
             // System Prompt
             OutlinedTextField(
                 value = uiState.systemPrompt,
                 onValueChange = { viewModel.updateSystemPrompt(it) },
-                label = { Text("System Prompt (chỉ dẫn hệ thống)") },
+                label = { Text("系统提示词(System Prompt)") },
                 modifier = Modifier.fillMaxWidth(),
                 minLines = 1, maxLines = 3,
                 textStyle = MaterialTheme.typography.bodySmall
@@ -490,7 +585,7 @@ fun SettingsPanel(uiState: ServerUiState, viewModel: ServerViewModel) {
 
             // Max Tokens
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Token tối đa: ${uiState.maxTokens}", style = MaterialTheme.typography.bodySmall, modifier = Modifier.width(120.dp))
+                Text("最大Token数: ${uiState.maxTokens}", style = MaterialTheme.typography.bodySmall, modifier = Modifier.width(120.dp))
                 Slider(
                     value = uiState.maxTokens.toFloat(),
                     onValueChange = { viewModel.updateMaxTokens(it.toInt()) },
@@ -587,7 +682,7 @@ fun ServerTab(
                 // Requests timeline
                 Column(Modifier.weight(1.4f).fillMaxHeight()) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("Yêu cầu gần đây", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                        Text("最近请求", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                         Spacer(Modifier.weight(1f))
                         val hasActive = tasks.any { it.status == AiServerService.Companion.TaskStatus.PROCESSING }
                         if (hasActive) {
@@ -595,20 +690,20 @@ fun ServerTab(
                                 tasks.filter { it.status == AiServerService.Companion.TaskStatus.PROCESSING }
                                     .forEach { AiServerService.cancelTask(it.id) }
                             }) {
-                                Icon(Icons.Default.StopCircle, "Dừng tất cả", Modifier.size(18.dp),
+                                Icon(Icons.Default.StopCircle, "停止全部", Modifier.size(18.dp),
                                     tint = MaterialTheme.colorScheme.error)
                             }
                         }
                         if (tasks.isNotEmpty()) {
                             IconButton(onClick = {
                                 shareText(context, "Server tasks report", tasksToReportText(tasks))
-                            }) { Icon(Icons.Default.IosShare, "Export tất cả", Modifier.size(18.dp)) }
+                            }) { Icon(Icons.Default.IosShare, "导出全部", Modifier.size(18.dp)) }
                             IconButton(onClick = {
                                 copyToClipboard(context, "Server tasks", tasksToReportText(tasks))
-                                android.widget.Toast.makeText(context, "Đã copy ${tasks.size} task", android.widget.Toast.LENGTH_SHORT).show()
-                            }) { Icon(Icons.Default.ContentCopy, "Copy tất cả", Modifier.size(18.dp)) }
+                                android.widget.Toast.makeText(context, "已复制 ${tasks.size} 个任务", android.widget.Toast.LENGTH_SHORT).show()
+                            }) { Icon(Icons.Default.ContentCopy, "复制全部", Modifier.size(18.dp)) }
                             IconButton(onClick = { AiServerService.clearTaskHistory() }) {
-                                Icon(Icons.Default.DeleteSweep, "Xóa", Modifier.size(18.dp))
+                                Icon(Icons.Default.DeleteSweep, "删除", Modifier.size(18.dp))
                             }
                         }
                     }
@@ -638,7 +733,7 @@ fun ServerTab(
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     item {
-                        Text("Mô hình", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                        Text("模型", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
                     }
                     item { ModelSelectorRow(uiState, viewModel, engineStatus) }
                     item { DiagnosticsCard(processPid, serviceRestarts, selfPingOk) }
@@ -646,14 +741,14 @@ fun ServerTab(
                     if (logs.isNotEmpty()) {
                         item {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text("Nhật ký", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                                Text("日志", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
                                 Spacer(Modifier.weight(1f))
                                 IconButton(onClick = {
                                     shareText(context, "Server logs", logs.joinToString("\n"))
                                 }) { Icon(Icons.Default.IosShare, "Export", Modifier.size(16.dp)) }
                                 IconButton(onClick = {
                                     copyToClipboard(context, "Server logs", logs.joinToString("\n"))
-                                    android.widget.Toast.makeText(context, "Đã copy ${logs.size} dòng", android.widget.Toast.LENGTH_SHORT).show()
+                                    android.widget.Toast.makeText(context, "已复制 ${logs.size} 行", android.widget.Toast.LENGTH_SHORT).show()
                                 }) { Icon(Icons.Default.ContentCopy, "Copy", Modifier.size(16.dp)) }
                             }
                         }
@@ -696,30 +791,30 @@ fun ServerTab(
                         Spacer(Modifier.width(12.dp))
                         Column {
                             Text(
-                                if (isRunning) "Máy chủ đang chạy" else "Máy chủ đã dừng",
+                                if (isRunning) "服务器正在运行" else "服务器已停止",
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Bold
                             )
                             if (isRunning) {
                                 val lanIp = remember(isRunning) { getLanIpAddress() }
-                                Text("Local (máy này):", style = MaterialTheme.typography.labelSmall,
+                                Text("本机 (这台设备):", style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 Text("http://127.0.0.1:$activePort", style = MaterialTheme.typography.bodySmall,
                                     fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Medium)
                                 if (lanIp != null) {
                                     Spacer(Modifier.height(2.dp))
-                                    Text("LAN (máy khác cùng WiFi):", style = MaterialTheme.typography.labelSmall,
+                                    Text("LAN (同一WiFi的其他设备):", style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                                     Text("http://$lanIp:$activePort", style = MaterialTheme.typography.bodySmall,
                                         fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Medium,
                                         color = MaterialTheme.colorScheme.primary)
                                 } else {
-                                    Text("LAN: không có WiFi", style = MaterialTheme.typography.labelSmall,
+                                    Text("LAN: 无WiFi", style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.error)
                                 }
                                 Spacer(Modifier.height(2.dp))
-                                Text("Mô hình: ${loadedModel ?: "chưa có"}", style = MaterialTheme.typography.bodySmall)
-                                Text("Số yêu cầu: $requestCount", style = MaterialTheme.typography.bodySmall)
+                                Text("模型: ${loadedModel ?: "暂无"}", style = MaterialTheme.typography.bodySmall)
+                                Text("请求数: $requestCount", style = MaterialTheme.typography.bodySmall)
                             }
                         }
                     }
@@ -753,13 +848,13 @@ fun ServerTab(
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Column(Modifier.padding(8.dp)) {
-                                Text("Các API có sẵn", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                                Text("可用API", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
                                 Text("Chat:  POST /v1/chat/completions", style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
                                 Text("Model: GET  /v1/models", style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
                                 Text("Audio: POST /v1/audio/transcriptions", style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
                                 Text("Image: POST /v1/images/describe", style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
                                 Text("Video: POST /v1/video/analyze", style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
-                                Text("Sức khỏe: GET /api/health", style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
+                                Text("健康检查: GET /api/health", style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
                             }
                         }
                     }
@@ -770,12 +865,12 @@ fun ServerTab(
                             Button(
                                 onClick = { AiServerService.stop(context) },
                                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
-                            ) { Icon(Icons.Default.Stop, null, Modifier.size(18.dp)); Spacer(Modifier.width(4.dp)); Text("Dừng") }
+                            ) { Icon(Icons.Default.Stop, null, Modifier.size(18.dp)); Spacer(Modifier.width(4.dp)); Text("停止") }
                         } else {
                             Button(
                                 onClick = { AiServerService.start(context) },
                                 enabled = engineStatus == LlmEngine.Status.READY
-                            ) { Icon(Icons.Default.PlayArrow, null, Modifier.size(18.dp)); Spacer(Modifier.width(4.dp)); Text("Chạy") }
+                            ) { Icon(Icons.Default.PlayArrow, null, Modifier.size(18.dp)); Spacer(Modifier.width(4.dp)); Text("运行") }
                         }
                     }
                 }
@@ -807,7 +902,7 @@ fun ServerTab(
                     Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("Yêu cầu gần đây", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    Text("最近请求", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                     Spacer(Modifier.weight(1f))
                     if (tasks.isNotEmpty()) {
                         IconButton(onClick = {
@@ -815,10 +910,10 @@ fun ServerTab(
                         }) { Icon(Icons.Default.IosShare, "Export", Modifier.size(18.dp)) }
                         IconButton(onClick = {
                             copyToClipboard(context, "Server tasks", tasksToReportText(tasks))
-                            android.widget.Toast.makeText(context, "Đã copy ${tasks.size} task", android.widget.Toast.LENGTH_SHORT).show()
+                            android.widget.Toast.makeText(context, "已复制 ${tasks.size} 个任务", android.widget.Toast.LENGTH_SHORT).show()
                         }) { Icon(Icons.Default.ContentCopy, "Copy", Modifier.size(18.dp)) }
                         IconButton(onClick = { AiServerService.clearTaskHistory() }) {
-                            Icon(Icons.Default.DeleteSweep, "Xóa", Modifier.size(18.dp))
+                            Icon(Icons.Default.DeleteSweep, "删除", Modifier.size(18.dp))
                         }
                     }
                 }
@@ -837,10 +932,10 @@ fun ServerTab(
                             Icon(Icons.Default.Inbox, null, Modifier.size(32.dp),
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f))
                             Spacer(Modifier.height(8.dp))
-                            Text("Chưa có yêu cầu nào",
+                            Text("暂无请求",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text("Gọi API từ app khác để xem ở đây",
+                            Text("从其他应用调用API以查看",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f))
                         }
@@ -862,7 +957,7 @@ fun ServerTab(
         item {
             HorizontalDivider()
             Spacer(Modifier.height(4.dp))
-            Text("Mô hình", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Text("模型", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
         }
 
         item {
@@ -871,14 +966,14 @@ fun ServerTab(
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.weight(1f)) {
                     OutlinedButton(onClick = { expanded = true }, modifier = Modifier.fillMaxWidth()) {
-                        Text(selectedName ?: if (uiState.localModels.isEmpty()) "Chưa có mô hình" else "Chọn mô hình...",
+                        Text(selectedName ?: if (uiState.localModels.isEmpty()) "暂无模型" else "选择模型...",
                             maxLines = 1)
                         Spacer(Modifier.weight(1f))
                         Icon(Icons.Default.ArrowDropDown, null)
                     }
                     DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
                         if (uiState.localModels.isEmpty()) {
-                            DropdownMenuItem(text = { Text("Chưa có mô hình. Vào tab Mô hình để tải.") }, onClick = { expanded = false })
+                            DropdownMenuItem(text = { Text("暂无模型。进入模型标签页下载。") }, onClick = { expanded = false })
                         }
                         uiState.localModels.forEach { model ->
                             DropdownMenuItem(
@@ -905,7 +1000,7 @@ fun ServerTab(
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (engineStatus == LlmEngine.Status.READY) {
                     OutlinedButton(onClick = { viewModel.unloadModel() }) {
-                        Icon(Icons.Default.Close, null, Modifier.size(16.dp)); Spacer(Modifier.width(4.dp)); Text("Gỡ mô hình")
+                        Icon(Icons.Default.Close, null, Modifier.size(16.dp)); Spacer(Modifier.width(4.dp)); Text("卸载模型")
                     }
                 } else {
                     Button(
@@ -914,9 +1009,9 @@ fun ServerTab(
                     ) {
                         if (uiState.isModelLoading) {
                             CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)
-                            Spacer(Modifier.width(8.dp)); Text("Đang tải...")
+                            Spacer(Modifier.width(8.dp)); Text("加载中...")
                         } else {
-                            Icon(Icons.Default.PlayArrow, null, Modifier.size(16.dp)); Spacer(Modifier.width(4.dp)); Text("Tải mô hình")
+                            Icon(Icons.Default.PlayArrow, null, Modifier.size(16.dp)); Spacer(Modifier.width(4.dp)); Text("加载模型")
                         }
                     }
                 }
@@ -929,14 +1024,14 @@ fun ServerTab(
                 HorizontalDivider()
                 Spacer(Modifier.height(4.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Nhật ký", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    Text("日志", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                     Spacer(Modifier.weight(1f))
                     IconButton(onClick = {
                         shareText(context, "Server logs", logs.joinToString("\n"))
                     }) { Icon(Icons.Default.IosShare, "Export logs", Modifier.size(18.dp)) }
                     IconButton(onClick = {
                         copyToClipboard(context, "Server logs", logs.joinToString("\n"))
-                        android.widget.Toast.makeText(context, "Đã copy ${logs.size} dòng log", android.widget.Toast.LENGTH_SHORT).show()
+                        android.widget.Toast.makeText(context, "已复制 ${logs.size} 行日志", android.widget.Toast.LENGTH_SHORT).show()
                     }) { Icon(Icons.Default.ContentCopy, "Copy logs", Modifier.size(18.dp)) }
                 }
             }
@@ -1014,7 +1109,7 @@ fun DiagnosticsCard(pid: Int, restarts: Int, pingOk: Boolean) {
                     tint = if (pingOk && !isLowMem) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
                 )
                 Spacer(Modifier.width(8.dp))
-                Text("Chẩn đoán", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                Text("诊断", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
             }
             Spacer(Modifier.height(8.dp))
 
@@ -1046,7 +1141,7 @@ fun DiagnosticsCard(pid: Int, restarts: Int, pingOk: Boolean) {
             Spacer(Modifier.height(8.dp))
 
             // RAM bars
-            Text("RAM thiết bị: ${availMb}MB trống / ${totalMb}MB tổng",
+            Text("设备RAM: ${availMb}MB 空闲 / ${totalMb}MB 总计",
                 style = MaterialTheme.typography.bodySmall)
             LinearProgressIndicator(
                 progress = { if (totalMb > 0) 1f - (availMb.toFloat() / totalMb) else 0f },
@@ -1064,7 +1159,7 @@ fun DiagnosticsCard(pid: Int, restarts: Int, pingOk: Boolean) {
             if (restarts > 1) {
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    "⚠ Service đã bị restart $restarts lần. Có thể thiết bị không đủ RAM cho model này.",
+                    "⚠ Service已重启 $restarts 次。设备可能没有足够的RAM运行此模型。",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.error
                 )
@@ -1072,7 +1167,7 @@ fun DiagnosticsCard(pid: Int, restarts: Int, pingOk: Boolean) {
             if (isLowMem) {
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    "⚠ Hệ thống đang thiếu RAM - nguy cơ process bị kill. Hãy đóng các app khác.",
+                    "⚠ 系统RAM不足 - 进程可能被终止。请关闭其他应用。",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.error
                 )
@@ -1113,7 +1208,7 @@ fun serverStatusItem(
                     Spacer(Modifier.width(12.dp))
                     Column(Modifier.weight(1f)) {
                         Text(
-                            if (isRunning) "Máy chủ đang chạy" else "Máy chủ đã dừng",
+                            if (isRunning) "服务器正在运行" else "服务器已停止",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold
                         )
@@ -1130,7 +1225,7 @@ fun serverStatusItem(
                                     fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Medium,
                                     color = MaterialTheme.colorScheme.primary)
                             }
-                            Text("Mô hình: ${loadedModel ?: "chưa có"}", style = MaterialTheme.typography.bodySmall)
+                            Text("模型: ${loadedModel ?: "暂无"}", style = MaterialTheme.typography.bodySmall)
                         }
                     }
                     // Start/Stop button aligned right
@@ -1141,12 +1236,12 @@ fun serverStatusItem(
                                 containerColor = MaterialTheme.colorScheme.errorContainer,
                                 contentColor = MaterialTheme.colorScheme.onErrorContainer
                             )
-                        ) { Icon(Icons.Default.Stop, null, Modifier.size(18.dp)); Spacer(Modifier.width(4.dp)); Text("Dừng") }
+                        ) { Icon(Icons.Default.Stop, null, Modifier.size(18.dp)); Spacer(Modifier.width(4.dp)); Text("停止") }
                     } else {
                         Button(
                             onClick = { AiServerService.start(context) },
                             enabled = engineStatus == LlmEngine.Status.READY
-                        ) { Icon(Icons.Default.PlayArrow, null, Modifier.size(18.dp)); Spacer(Modifier.width(4.dp)); Text("Chạy") }
+                        ) { Icon(Icons.Default.PlayArrow, null, Modifier.size(18.dp)); Spacer(Modifier.width(4.dp)); Text("运行") }
                     }
                 }
             }
@@ -1163,7 +1258,7 @@ fun modelSelectorItems(
     scope.item {
         HorizontalDivider()
         Spacer(Modifier.height(4.dp))
-        Text("Mô hình", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+        Text("模型", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
     }
     scope.item { ModelSelectorRow(uiState, viewModel, engineStatus) }
 }
@@ -1176,13 +1271,13 @@ private fun ModelSelectorRow(uiState: ServerUiState, viewModel: ServerViewModel,
     Column {
         Box(Modifier.fillMaxWidth()) {
             OutlinedButton(onClick = { expanded = true }, modifier = Modifier.fillMaxWidth()) {
-                Text(selectedName ?: if (uiState.localModels.isEmpty()) "Chưa có mô hình" else "Chọn mô hình...", maxLines = 1)
+                Text(selectedName ?: if (uiState.localModels.isEmpty()) "暂无模型" else "选择模型...", maxLines = 1)
                 Spacer(Modifier.weight(1f))
                 Icon(Icons.Default.ArrowDropDown, null)
             }
             DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
                 if (uiState.localModels.isEmpty()) {
-                    DropdownMenuItem(text = { Text("Chưa có mô hình. Vào tab Mô hình để tải.") }, onClick = { expanded = false })
+                    DropdownMenuItem(text = { Text("暂无模型。进入模型标签页下载。") }, onClick = { expanded = false })
                 }
                 uiState.localModels.forEach { model ->
                     DropdownMenuItem(
@@ -1206,7 +1301,7 @@ private fun ModelSelectorRow(uiState: ServerUiState, viewModel: ServerViewModel,
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             if (engineStatus == LlmEngine.Status.READY) {
                 OutlinedButton(onClick = { viewModel.unloadModel() }) {
-                    Icon(Icons.Default.Close, null, Modifier.size(16.dp)); Spacer(Modifier.width(4.dp)); Text("Gỡ mô hình")
+                    Icon(Icons.Default.Close, null, Modifier.size(16.dp)); Spacer(Modifier.width(4.dp)); Text("卸载模型")
                 }
             } else {
                 Button(
@@ -1215,9 +1310,9 @@ private fun ModelSelectorRow(uiState: ServerUiState, viewModel: ServerViewModel,
                 ) {
                     if (uiState.isModelLoading) {
                         CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)
-                        Spacer(Modifier.width(8.dp)); Text("Đang tải...")
+                        Spacer(Modifier.width(8.dp)); Text("加载中...")
                     } else {
-                        Icon(Icons.Default.PlayArrow, null, Modifier.size(16.dp)); Spacer(Modifier.width(4.dp)); Text("Tải mô hình")
+                        Icon(Icons.Default.PlayArrow, null, Modifier.size(16.dp)); Spacer(Modifier.width(4.dp)); Text("加载模型")
                     }
                 }
             }
@@ -1249,28 +1344,28 @@ fun KpiCardsRow(
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         KpiCard(
-            label = "Tổng",
+            label = "总计",
             value = "$totalRequests",
-            subtitle = "yêu cầu",
+            subtitle = "请求",
             modifier = Modifier.weight(1f)
         )
         KpiCard(
-            label = "Thành công",
+            label = "成功",
             value = "$successRate%",
             subtitle = "$successCount/$totalRequests",
             valueColor = successColor,
             modifier = Modifier.weight(1f)
         )
         KpiCard(
-            label = "Độ trễ TB",
+            label = "平均延迟",
             value = formatLatency(avgLatencyMs),
-            subtitle = "trung bình",
+            subtitle = "平均",
             modifier = Modifier.weight(1f)
         )
         KpiCard(
-            label = "Hàng đợi",
+            label = "队列",
             value = "$activeCount",
-            subtitle = if (activeCount > 0) "đang xử lý" else "trống",
+            subtitle = if (activeCount > 0) "正在处理" else "空闲",
             valueColor = if (activeCount > 0) MaterialTheme.colorScheme.tertiary
                 else MaterialTheme.colorScheme.onSurface,
             modifier = Modifier.weight(1f)
@@ -1330,7 +1425,7 @@ fun CurrentTaskCard(task: AiServerService.Companion.RequestTask) {
                     color = MaterialTheme.colorScheme.tertiary
                 )
                 Spacer(Modifier.width(8.dp))
-                Text("ĐANG XỬ LÝ", style = MaterialTheme.typography.labelSmall,
+                Text("正在处理中", style = MaterialTheme.typography.labelSmall,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.tertiary)
                 Spacer(Modifier.weight(1f))
@@ -1342,7 +1437,7 @@ fun CurrentTaskCard(task: AiServerService.Companion.RequestTask) {
                     onClick = { AiServerService.cancelTask(task.id) },
                     modifier = Modifier.size(28.dp)
                 ) {
-                    Icon(Icons.Default.Stop, "Dừng task", Modifier.size(18.dp),
+                    Icon(Icons.Default.Stop, "停止任务", Modifier.size(18.dp),
                         tint = MaterialTheme.colorScheme.error)
                 }
             }
@@ -1484,20 +1579,20 @@ fun TaskDetailSheet(taskId: String, onDismiss: () -> Unit) {
                 }
                 if (task.status == AiServerService.Companion.TaskStatus.PROCESSING) {
                     IconButton(onClick = { AiServerService.cancelTask(task.id) }) {
-                        Icon(Icons.Default.Stop, "Dừng task", Modifier.size(20.dp),
+                        Icon(Icons.Default.Stop, "停止任务", Modifier.size(20.dp),
                             tint = MaterialTheme.colorScheme.error)
                     }
                 }
                 IconButton(onClick = {
                     copyToClipboard(context, "Task ${task.id}", taskToDetailText(task))
-                    android.widget.Toast.makeText(context, "Đã copy vào clipboard", android.widget.Toast.LENGTH_SHORT).show()
+                    android.widget.Toast.makeText(context, "已复制到剪贴板", android.widget.Toast.LENGTH_SHORT).show()
                 }) {
                     Icon(Icons.Default.ContentCopy, "Copy task", Modifier.size(20.dp))
                 }
                 IconButton(onClick = {
                     shareText(context, "Task ${task.method} ${task.endpoint}", taskToDetailText(task))
                 }) {
-                    Icon(Icons.Default.Share, "Chia sẻ task", Modifier.size(20.dp))
+                    Icon(Icons.Default.Share, "分享任务", Modifier.size(20.dp))
                 }
             }
             Spacer(Modifier.height(8.dp))
@@ -1505,7 +1600,7 @@ fun TaskDetailSheet(taskId: String, onDismiss: () -> Unit) {
             // Tabs
             TabRow(selectedTabIndex = selectedTab) {
                 Tab(selected = selectedTab == 0, onClick = { selectedTab = 0 },
-                    text = { Text("Tổng quan") })
+                    text = { Text("概览") })
                 Tab(selected = selectedTab == 1, onClick = { selectedTab = 1 },
                     text = { Text("Request") })
                 Tab(selected = selectedTab == 2, onClick = { selectedTab = 2 },
@@ -1537,13 +1632,13 @@ private fun OverviewTabContent(task: AiServerService.Companion.RequestTask, time
         }
         item {
             DetailSection("Timing") {
-                DetailRow("Bắt đầu", timeFmt.format(java.util.Date(task.startTime)))
-                task.endTime?.let { DetailRow("Kết thúc", timeFmt.format(java.util.Date(it))) }
-                DetailRow("Thời gian", formatLatency(task.durationMs))
+                DetailRow("开始", timeFmt.format(java.util.Date(task.startTime)))
+                task.endTime?.let { DetailRow("结束", timeFmt.format(java.util.Date(it))) }
+                DetailRow("耗时", formatLatency(task.durationMs))
             }
         }
         item {
-            DetailSection("Dữ liệu") {
+            DetailSection("数据") {
                 DetailRow("Input", formatBytes(task.inputBytes))
                 DetailRow("Output", formatBytes(task.outputBytes))
                 if (task.streamingChunks > 0) DetailRow("Stream chunks", "${task.streamingChunks}")
@@ -1552,7 +1647,7 @@ private fun OverviewTabContent(task: AiServerService.Companion.RequestTask, time
         }
         if (task.parameters.isNotEmpty()) {
             item {
-                DetailSection("Tham số") {
+                DetailSection("参数") {
                     task.parameters.forEach { (k, v) ->
                         DetailRow(k, if (v.length > 80) v.take(80) + "..." else v)
                     }
@@ -1561,7 +1656,7 @@ private fun OverviewTabContent(task: AiServerService.Companion.RequestTask, time
         }
         if (task.error != null) {
             item {
-                DetailSection("Lỗi") {
+                DetailSection("错误") {
                     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
                         Text(task.error, modifier = Modifier.padding(8.dp),
                             style = MaterialTheme.typography.bodySmall,
@@ -1588,7 +1683,7 @@ private fun RequestTabContent(task: AiServerService.Companion.RequestTask) {
         if (task.requestBody.isNullOrBlank()) {
             item {
                 Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
-                    Text("Không có nội dung request",
+                    Text("无请求内容",
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
@@ -1616,11 +1711,11 @@ private fun ResponseTabContent(task: AiServerService.Companion.RequestTask) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             CircularProgressIndicator(Modifier.size(32.dp), strokeWidth = 3.dp)
                             Spacer(Modifier.height(8.dp))
-                            Text("Đang xử lý... ${task.streamingChunks} chunks",
+                            Text("正在处理... ${task.streamingChunks} 个分块",
                                 color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     } else {
-                        Text("Không có phản hồi",
+                        Text("无响应",
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
@@ -1716,7 +1811,7 @@ fun shareText(context: android.content.Context, subject: String, text: String) {
         putExtra(android.content.Intent.EXTRA_SUBJECT, subject)
         putExtra(android.content.Intent.EXTRA_TEXT, text)
     }
-    context.startActivity(android.content.Intent.createChooser(intent, "Chia sẻ / Lưu file").apply {
+    context.startActivity(android.content.Intent.createChooser(intent, "分享/保存文件").apply {
         addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
     })
 }
@@ -1831,7 +1926,7 @@ fun CompactStatusCard(
                 Icon(Icons.Default.CheckCircle, null,
                     tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp))
                 Spacer(Modifier.width(8.dp))
-                Text("Đang chạy", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                Text("正在运行", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.weight(1f))
                 FilledTonalButton(
                     onClick = { AiServerService.stop(context) },
@@ -1843,7 +1938,7 @@ fun CompactStatusCard(
                 ) {
                     Icon(Icons.Default.Stop, null, Modifier.size(14.dp))
                     Spacer(Modifier.width(4.dp))
-                    Text("Dừng", style = MaterialTheme.typography.labelMedium)
+                    Text("停止", style = MaterialTheme.typography.labelMedium)
                 }
             }
             Spacer(Modifier.height(6.dp))
@@ -1855,7 +1950,7 @@ fun CompactStatusCard(
                     fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Medium,
                     color = MaterialTheme.colorScheme.primary)
             }
-            Text(loadedModel ?: "Chưa tải mô hình",
+            Text(loadedModel ?: "未加载模型",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f))
         }
@@ -1875,10 +1970,10 @@ fun EmptyTasksCard() {
             Icon(Icons.Default.Inbox, null, Modifier.size(40.dp),
                 tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f))
             Spacer(Modifier.height(8.dp))
-            Text("Chưa có yêu cầu nào",
+            Text("暂无请求",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text("Gọi API từ app khác để xem ở đây",
+            Text("从其他应用调用API以查看",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f))
         }
@@ -1892,7 +1987,7 @@ fun ApiEndpointsCard() {
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
     ) {
         Column(Modifier.padding(10.dp)) {
-            Text("API có sẵn", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+            Text("可用API", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(4.dp))
             listOf(
                 "POST /v1/chat/completions",
@@ -1931,8 +2026,8 @@ fun ChatTab(uiState: ServerUiState, viewModel: ServerViewModel, loadedModel: Str
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column(Modifier.weight(1f)) {
-                Text("Trò chuyện", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                Text(loadedModel ?: "Chưa tải mô hình", style = MaterialTheme.typography.labelSmall,
+                Text("聊天", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Text(loadedModel ?: "未加载模型", style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             // Performance badge
@@ -1950,7 +2045,7 @@ fun ChatTab(uiState: ServerUiState, viewModel: ServerViewModel, loadedModel: Str
                 }
             }
             IconButton(onClick = { viewModel.clearChat() }) {
-                Icon(Icons.Default.DeleteSweep, "Xóa trò chuyện")
+                Icon(Icons.Default.DeleteSweep, "删除聊天")
             }
         }
 
@@ -1970,7 +2065,7 @@ fun ChatTab(uiState: ServerUiState, viewModel: ServerViewModel, loadedModel: Str
                             Icon(Icons.Default.Forum, null, Modifier.size(48.dp),
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f))
                             Spacer(Modifier.height(8.dp))
-                            Text("Bắt đầu cuộc trò chuyện",
+                            Text("开始聊天",
                                 style = MaterialTheme.typography.bodyLarge,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f))
                         }
@@ -1995,14 +2090,14 @@ fun ChatTab(uiState: ServerUiState, viewModel: ServerViewModel, loadedModel: Str
                     Row(Modifier.padding(vertical = 8.dp)) {
                         CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
                         Spacer(Modifier.width(8.dp))
-                        Text("Đang suy nghĩ...", style = MaterialTheme.typography.bodySmall,
+                        Text("正在思考...", style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             }
         }
 
-        // Input area (text-only in UI - dùng endpoint API cho multimodal)
+        // Input area (text-only in UI - 使用API端点进行多模态)
         HorizontalDivider()
         Row(
             Modifier.fillMaxWidth().padding(8.dp),
@@ -2012,7 +2107,7 @@ fun ChatTab(uiState: ServerUiState, viewModel: ServerViewModel, loadedModel: Str
                 value = inputText,
                 onValueChange = { inputText = it },
                 modifier = Modifier.weight(1f),
-                placeholder = { Text("Nhập tin nhắn...") },
+                placeholder = { Text("输入消息...") },
                 minLines = 1,
                 maxLines = 4,
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
@@ -2038,7 +2133,7 @@ fun ChatTab(uiState: ServerUiState, viewModel: ServerViewModel, loadedModel: Str
                 if (uiState.isGenerating) {
                     CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)
                 } else {
-                    Icon(Icons.Default.ArrowUpward, "Gửi")
+                    Icon(Icons.Default.ArrowUpward, "发送")
                 }
             }
         }
@@ -2095,8 +2190,8 @@ fun DownloadTab(uiState: ServerUiState, viewModel: ServerViewModel, layoutSize: 
     }
 
     Column(Modifier.fillMaxSize().padding(16.dp)) {
-        Text("Kho mô hình", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-        Text("Tải mô hình để chạy AI ngay trên máy",
+        Text("模型库", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+        Text("下载模型以在本地运行AI",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
 
         // Download progress
@@ -2106,7 +2201,7 @@ fun DownloadTab(uiState: ServerUiState, viewModel: ServerViewModel, layoutSize: 
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer),
                 modifier = Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(12.dp)) {
-                    Text("Đang tải: ${model?.displayName ?: "..."}", fontWeight = FontWeight.SemiBold)
+                    Text("正在下载: ${model?.displayName ?: "..."}", fontWeight = FontWeight.SemiBold)
                     Spacer(Modifier.height(8.dp))
                     LinearProgressIndicator(
                         progress = { uiState.downloadProgress },
@@ -2120,13 +2215,57 @@ fun DownloadTab(uiState: ServerUiState, viewModel: ServerViewModel, layoutSize: 
                     OutlinedButton(
                         onClick = { viewModel.cancelDownload() },
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
-                    ) { Text("Hủy") }
+                    ) { Text("取消") }
                 }
             }
         }
         Spacer(Modifier.height(8.dp))
 
-        // Model catalog - adaptive grid
+        // ── 本地大模型记录（文件 > 1GB）──
+        val largeLocalModels = uiState.localModels.filter { it.sizeMb > 1024 }
+        if (largeLocalModels.isNotEmpty()) {
+            Text("本地大模型（> 1GB）",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary
+            )
+            Spacer(Modifier.height(4.dp))
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                largeLocalModels.forEach { model ->
+                    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)),
+                        modifier = Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(12.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(model.name, fontWeight = FontWeight.Bold)
+                                    Text(model.description, style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                                Spacer(Modifier.width(12.dp))
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text("~${model.sizeMb}MB", style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Bold)
+                                    IconButton(onClick = { viewModel.deleteLocalModel(model.path) }) {
+                                        Icon(Icons.Default.Delete, "删除", tint = MaterialTheme.colorScheme.error)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 分隔符
+            HorizontalDivider(
+                modifier = Modifier.padding(vertical = 16.dp),
+                color = MaterialTheme.colorScheme.outlineVariant,
+                thickness = 2.dp
+            )
+            Spacer(Modifier.height(8.dp))
+        }
+
+        // 云端模型下载标题
+        Text("云端模型下载", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
         LazyVerticalGrid(
             columns = GridCells.Fixed(columns),
             verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -2157,7 +2296,7 @@ fun DownloadTab(uiState: ServerUiState, viewModel: ServerViewModel, layoutSize: 
                                     shape = RoundedCornerShape(4.dp),
                                     color = MaterialTheme.colorScheme.primary
                                 ) {
-                                    Text("Đã tải", style = MaterialTheme.typography.labelSmall,
+                                    Text("已下载", style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.onPrimary,
                                         modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
                                 }
@@ -2175,7 +2314,7 @@ fun DownloadTab(uiState: ServerUiState, viewModel: ServerViewModel, layoutSize: 
 
                     if (downloaded) {
                         IconButton(onClick = { viewModel.deleteModel(model.id) }) {
-                            Icon(Icons.Default.Delete, "Xóa", tint = MaterialTheme.colorScheme.error)
+                            Icon(Icons.Default.Delete, "删除", tint = MaterialTheme.colorScheme.error)
                         }
                     } else {
                         IconButton(
@@ -2185,7 +2324,7 @@ fun DownloadTab(uiState: ServerUiState, viewModel: ServerViewModel, layoutSize: 
                             if (isDownloading) {
                                 CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
                             } else {
-                                Icon(Icons.Default.CloudDownload, "Tải xuống", tint = MaterialTheme.colorScheme.primary)
+                                Icon(Icons.Default.CloudDownload, "下载", tint = MaterialTheme.colorScheme.primary)
                             }
                         }
                     }

@@ -155,7 +155,7 @@ class LlmEngine(private val context: Context) {
             val file = File(path)
             if (!file.exists()) {
                 _status.value = Status.ERROR
-                return@withContext Result.failure(Exception("Không tìm thấy tệp: $path"))
+                return@withContext Result.failure(Exception("未找到文件: $path"))
             }
 
             val format = when (file.extension) {
@@ -231,7 +231,7 @@ class LlmEngine(private val context: Context) {
         _queueDepth.update { it + 1 }
         if (!inferenceLock.tryAcquire(60, TimeUnit.SECONDS)) {
             _queueDepth.update { it - 1 }
-            throw Exception("Máy chủ đang bận - hết thời gian chờ trong hàng đợi (60s)")
+            throw Exception("服务器繁忙 - 队列超时(60s)")
         }
         try {
             _queueDepth.update { it - 1 }
@@ -267,7 +267,7 @@ class LlmEngine(private val context: Context) {
         topP: Float
     ): String = when (loadedFormat) {
         ModelFormat.TASK -> {
-            val engine = mediaPipeEngine ?: throw Exception("Chưa tải mô hình")
+            val engine = mediaPipeEngine ?: throw Exception("未加载模型")
             val opts = LlmInferenceSessionOptions.builder()
                 .setTemperature(temperature).setTopK(topK).setTopP(topP).build()
             val session = LlmInferenceSession.createFromOptions(engine, opts)
@@ -277,7 +277,7 @@ class LlmEngine(private val context: Context) {
             } finally { session.close() }
         }
         ModelFormat.LITERTLM -> {
-            val engine = liteRtEngine ?: throw Exception("Chưa tải mô hình")
+            val engine = liteRtEngine ?: throw Exception("未加载模型")
             val config = ConversationConfig(
                 samplerConfig = SamplerConfig(topK = topK, topP = topP.toDouble(), temperature = temperature.toDouble())
             )
@@ -301,7 +301,7 @@ class LlmEngine(private val context: Context) {
                 result.toString()
             } finally { conversation.close() }
         }
-        ModelFormat.NONE -> throw Exception("Chưa tải mô hình")
+        ModelFormat.NONE -> throw Exception("未加载模型")
     }
 
     // ── Streaming inference (thread-safe) ──
@@ -324,13 +324,13 @@ class LlmEngine(private val context: Context) {
         _queueDepth.update { it + 1 }
         if (!inferenceLock.tryAcquire(60, TimeUnit.SECONDS)) {
             _queueDepth.update { it - 1 }
-            onError(Exception("Máy chủ đang bận - hết thời gian chờ trong hàng đợi (60s)"))
+            onError(Exception("服务器繁忙 - 队列超时(60s)"))
             return
         }
         _queueDepth.update { it - 1 }
         if (cancelToken?.isCancelled == true) {
             inferenceLock.release()
-            onError(Exception("Đã hủy"))
+            onError(Exception("已取消"))
             return
         }
         val startTime = System.currentTimeMillis()
@@ -342,7 +342,7 @@ class LlmEngine(private val context: Context) {
             when (loadedFormat) {
                 ModelFormat.TASK -> streamMediaPipe(prompt, temperature, topK, topP, cancelToken, onChunk, wrappedComplete)
                 ModelFormat.LITERTLM -> streamLiteRT(prompt, temperature, topK, topP, cancelToken, onChunk, wrappedComplete)
-                ModelFormat.NONE -> onError(Exception("Chưa tải mô hình"))
+                ModelFormat.NONE -> onError(Exception("未加载模型"))
             }
         } catch (e: Exception) {
             onError(e)
@@ -397,24 +397,24 @@ class LlmEngine(private val context: Context) {
         onError: (Exception) -> Unit
     ) {
         if (!isMultimodal) {
-            onError(Exception("Mô hình hiện tại không hỗ trợ đa phương tiện. Hãy tải Gemma 4 (.litertlm)."))
+            onError(Exception("当前模型不支持多媒体。请加载 Gemma 4 (.litertlm)。"))
             return
         }
         _queueDepth.update { it + 1 }
         if (!inferenceLock.tryAcquire(60, TimeUnit.SECONDS)) {
             _queueDepth.update { it - 1 }
-            onError(Exception("Máy chủ đang bận - hết thời gian chờ trong hàng đợi (60s)"))
+            onError(Exception("服务器繁忙 - 队列超时(60s)"))
             return
         }
         _queueDepth.update { it - 1 }
         if (cancelToken?.isCancelled == true) {
             inferenceLock.release()
-            onError(Exception("Đã hủy"))
+            onError(Exception("已取消"))
             return
         }
         val startTime = System.currentTimeMillis()
         try {
-            val engine = liteRtEngine ?: throw Exception("Chưa tải mô hình")
+            val engine = liteRtEngine ?: throw Exception("未加载模型")
             val config = ConversationConfig(
                 samplerConfig = SamplerConfig(topK = topK, topP = topP.toDouble(), temperature = temperature.toDouble())
             )
@@ -510,7 +510,7 @@ class LlmEngine(private val context: Context) {
                     if (cancelToken?.isCancelled == true) {
                         if (!completed) {
                             completed = true
-                            onComplete(lastPartial + "\n[Đã hủy]")
+                            onComplete(lastPartial + "\n[已取消]")
                         }
                         return@generateResponseAsync
                     }
@@ -543,7 +543,7 @@ class LlmEngine(private val context: Context) {
         onChunk: (String) -> Unit,
         onComplete: (String) -> Unit
     ) {
-        val engine = liteRtEngine ?: throw Exception("Chưa tải mô hình")
+        val engine = liteRtEngine ?: throw Exception("未加载模型")
         val config = ConversationConfig(
             samplerConfig = SamplerConfig(topK = topK, topP = topP.toDouble(), temperature = temperature.toDouble())
         )
@@ -555,15 +555,21 @@ class LlmEngine(private val context: Context) {
                 runBlocking {
                     conversation.sendMessageAsync(prompt)
                         .catch { e ->
-                            val sync = conversation.sendMessage(prompt)
-                            val text = sync.textContent()
-                            result.append(text)
-                            onChunk(text)
+                            // 流式失败，降级到同步调用
+                            try {
+                                val sync = conversation.sendMessage(prompt)
+                                val text = sync.textContent()
+                                result.append(text)
+                                onChunk(text)
+                            } catch (syncError: Exception) {
+                                // 同步调用也失败，记录详细错误
+                                throw Exception("流式和同步调用都失败: ${syncError.message?.take(200)}", syncError)
+                            }
                         }
                         .collect { msg ->
                             if (cancelToken?.isCancelled == true) {
                                 cancelled = true
-                                result.append("\n[Đã hủy]")
+                                result.append("\n[已取消]")
                                 throw kotlinx.coroutines.CancellationException("User cancelled")
                             }
                             val text = msg.textContent()
@@ -573,12 +579,18 @@ class LlmEngine(private val context: Context) {
                 }
             } catch (_: kotlinx.coroutines.CancellationException) {
                 // expected on user cancel
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                // 流式调用失败，尝试降级到同步调用
                 if (result.isEmpty()) {
-                    val sync = conversation.sendMessage(prompt)
-                    val text = sync.textContent()
-                    result.append(text)
-                    onChunk(text)
+                    try {
+                        val sync = conversation.sendMessage(prompt)
+                        val text = sync.textContent()
+                        result.append(text)
+                        onChunk(text)
+                    } catch (syncError: Exception) {
+                        // 同步调用也失败，抛出异常
+                        throw Exception("流式调用失败后同步调用也失败: ${syncError.message?.take(200)}", syncError)
+                    }
                 }
             }
             onComplete(result.toString())
@@ -672,7 +684,7 @@ class LlmEngine(private val context: Context) {
 
             try {
                 while (input.read(buf).also { read = it } != -1) {
-                    if (cancelDownload) return@withContext Result.failure(Exception("Đã hủy"))
+                    if (cancelDownload) return@withContext Result.failure(Exception("已取消"))
                     output.write(buf, 0, read)
                     downloaded += read
                     val now = System.currentTimeMillis()
@@ -716,37 +728,37 @@ class LlmEngine(private val context: Context) {
         val MODEL_CATALOG = listOf(
             // ── Gemma 4 (.litertlm - LiteRT GenAI) ──
             DownloadableModel("gemma4-e2b", "Gemma 4 E2B", "gemma-4-E2B-it.litertlm",
-                "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm",
-                2464, "~3 GB", "Gemma 4 mới nhất, 2B tham số, đa phương tiện"),
+                "https://hf-mirror.com/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm",
+                2464, "~3 GB", "最新的 Gemma 4, 2B参数, 多媒体"),
             DownloadableModel("gemma4-e4b", "Gemma 4 E4B", "gemma-4-E4B-it.litertlm",
-                "https://huggingface.co/litert-community/gemma-4-E4B-it-litert-lm/resolve/main/gemma-4-E4B-it.litertlm",
-                3486, "~4.5 GB", "Gemma 4 mạnh nhất, 4B tham số, đa phương tiện"),
+                "https://hf-mirror.com/litert-community/gemma-4-E4B-it-litert-lm/resolve/main/gemma-4-E4B-it.litertlm",
+                3486, "~4.5 GB", "最强的 Gemma 4, 4B参数, 多媒体"),
             // ── Gemma 3 (.task - MediaPipe, mirrored) ──
             DownloadableModel("gemma3-270m-q8", "Gemma 3 270M", "gemma3-270m-it-q8.task",
-                "https://huggingface.co/omermalix66/gemma3-270m-it-q8.task/resolve/main/gemma3-270m-it-q8.task",
-                290, "~0.5 GB", "Siêu nhẹ, tốc độ cao"),
+                "https://hf-mirror.com/omermalix66/gemma3-270m-it-q8.task/resolve/main/gemma3-270m-it-q8.task",
+                290, "~0.5 GB", "超轻量, 高速"),
             DownloadableModel("gemma3-1b-int4", "Gemma 3 1B (Int4)", "gemma3-1b-it-int4.task",
-                "https://huggingface.co/AfiOne/gemma3-1b-it-int4.task/resolve/main/gemma3-1b-it-int4.task",
-                555, "~1 GB", "Nhẹ, cân bằng chất lượng/kích thước tốt"),
+                "https://hf-mirror.com/AfiOne/gemma3-1b-it-int4.task/resolve/main/gemma3-1b-it-int4.task",
+                555, "~1 GB", "轻量, 质量/大小平衡良好"),
             // ── Other models (.task) ──
             DownloadableModel("qwen25-0.5b", "Qwen 2.5 0.5B", "Qwen2.5-0.5B-Instruct_multi-prefill-seq_q8_ekv1280.task",
-                "https://huggingface.co/litert-community/Qwen2.5-0.5B-Instruct/resolve/main/Qwen2.5-0.5B-Instruct_multi-prefill-seq_q8_ekv1280.task",
-                521, "~0.8 GB", "Đa ngôn ngữ, Apache 2.0"),
+                "https://hf-mirror.com/litert-community/Qwen2.5-0.5B-Instruct/resolve/main/Qwen2.5-0.5B-Instruct_multi-prefill-seq_q8_ekv1280.task",
+                521, "~0.8 GB", "多语言, Apache 2.0"),
             DownloadableModel("qwen25-1.5b", "Qwen 2.5 1.5B", "Qwen2.5-1.5B-Instruct_multi-prefill-seq_q8_ekv1280.task",
-                "https://huggingface.co/litert-community/Qwen2.5-1.5B-Instruct/resolve/main/Qwen2.5-1.5B-Instruct_multi-prefill-seq_q8_ekv1280.task",
-                1524, "~2 GB", "Đa ngôn ngữ xuất sắc"),
+                "https://hf-mirror.com/litert-community/Qwen2.5-1.5B-Instruct/resolve/main/Qwen2.5-1.5B-Instruct_multi-prefill-seq_q8_ekv1280.task",
+                1524, "~2 GB", "出色的多语言支持"),
             DownloadableModel("deepseek-r1-1.5b", "DeepSeek R1 1.5B", "DeepSeek-R1-Distill-Qwen-1.5B_multi-prefill-seq_q8_ekv1280.task",
-                "https://huggingface.co/litert-community/DeepSeek-R1-Distill-Qwen-1.5B/resolve/main/DeepSeek-R1-Distill-Qwen-1.5B_multi-prefill-seq_q8_ekv1280.task",
-                1775, "~2 GB", "Lý luận logic tốt"),
+                "https://hf-mirror.com/litert-community/DeepSeek-R1-Distill-Qwen-1.5B/resolve/main/DeepSeek-R1-Distill-Qwen-1.5B_multi-prefill-seq_q8_ekv1280.task",
+                1775, "~2 GB", "良好的逻辑推理"),
             DownloadableModel("smollm-135m", "SmolLM 135M", "SmolLM-135M-Instruct_multi-prefill-seq_q8_ekv1280.task",
-                "https://huggingface.co/litert-community/SmolLM-135M-Instruct/resolve/main/SmolLM-135M-Instruct_multi-prefill-seq_q8_ekv1280.task",
-                159, "~0.3 GB", "Siêu nhỏ 159MB, tải nhanh"),
+                "https://hf-mirror.com/litert-community/SmolLM-135M-Instruct/resolve/main/SmolLM-135M-Instruct_multi-prefill-seq_q8_ekv1280.task",
+                159, "~0.3 GB", "超小159MB, 快速加载"),
             DownloadableModel("tinyllama-1.1b", "TinyLlama 1.1B", "TinyLlama-1.1B-Chat-v1.0_multi-prefill-seq_q8_ekv1280.task",
-                "https://huggingface.co/litert-community/TinyLlama-1.1B-Chat-v1.0/resolve/main/TinyLlama-1.1B-Chat-v1.0_multi-prefill-seq_q8_ekv1280.task",
-                1095, "~1.5 GB", "Nhẹ, chat tốt"),
+                "https://hf-mirror.com/litert-community/TinyLlama-1.1B-Chat-v1.0/resolve/main/TinyLlama-1.1B-Chat-v1.0_multi-prefill-seq_q8_ekv1280.task",
+                1095, "~1.5 GB", "轻量, 聊天良好"),
             DownloadableModel("gemma2-2b-int8", "Gemma 2 2B (Int8)", "gemma2-2b-it-cpu-int8.task",
-                "https://huggingface.co/CarlosJefte/Gemma-2-2b-mediapipe/resolve/main/gemma2-2b-it-cpu-int8.task",
-                2588, "~3 GB", "Ổn định, đã kiểm chứng"),
+                "https://hf-mirror.com/CarlosJefte/Gemma-2-2b-mediapipe/resolve/main/gemma2-2b-it-cpu-int8.task",
+                2588, "~3 GB", "稳定, 已验证"),
         )
     }
 }

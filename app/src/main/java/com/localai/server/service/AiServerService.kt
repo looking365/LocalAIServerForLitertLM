@@ -265,9 +265,9 @@ class AiServerService : Service() {
         _processPid.value = android.os.Process.myPid()
         _serviceRestartCount.update { it + 1 }
         if (isRestart) {
-            addLog("⚠ Service restart (PID=${_processPid.value}, lần #${_serviceRestartCount.value}) - process có thể đã bị kill")
+            addLog("⚠ Service重启 (PID=${_processPid.value}, 第${_serviceRestartCount.value}) - 进程可能已被终止")
         } else {
-            addLog("Service khởi động (PID=${_processPid.value})")
+            addLog("Service启动 (PID=${_processPid.value})")
         }
 
         startForeground(NOTIFICATION_ID, buildNotification("Đang khởi động máy chủ..."))
@@ -285,11 +285,11 @@ class AiServerService : Service() {
             ?: if (isRestart && app.settings.serverShouldBeRunning) app.settings.lastModelPath.takeIf { it.isNotBlank() } else null
 
         if (autoLoadPath != null && !app.engine.isLoaded) {
-            addLog("Đang tự tải mô hình: ${autoLoadPath.substringAfterLast('/')}")
+            addLog("正在自动加载模型: ${autoLoadPath.substringAfterLast('/')}")
             serviceScope.launch {
                 app.engine.loadModel(autoLoadPath)
-                    .onSuccess { addLog("Mô hình tự tải thành công") }
-                    .onFailure { e -> addLog("Tự tải thất bại: ${e.message}") }
+                    .onSuccess { addLog("模型自动加载成功") }
+                    .onFailure { e -> addLog("自动加载失败: ${e.message}") }
             }
         }
 
@@ -314,7 +314,7 @@ class AiServerService : Service() {
                 } catch (_: Exception) { false }
                 _lastSelfPingOk.value = ok
                 if (!ok && _isRunning.value) {
-                    addLog("⚠ Watchdog: HTTP server không phản hồi, khởi động lại...")
+                    addLog("⚠ Watchdog: HTTP服务器无响应,正在重启...")
                     stopHttpServer()
                     startHttpServer()
                 }
@@ -323,7 +323,7 @@ class AiServerService : Service() {
     }
 
     override fun onDestroy() {
-        addLog("Service onDestroy (PID=${android.os.Process.myPid()})")
+        addLog("Service销毁 (PID=${android.os.Process.myPid()})")
         watchdogJob?.cancel()
         stopHttpServer()
         releaseWakeLock()
@@ -336,14 +336,14 @@ class AiServerService : Service() {
         wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "LocalAIServer::ServerWakeLock").apply {
             acquire()
         }
-        addLog("Đã kích hoạt WakeLock - CPU sẽ giữ hoạt động")
+        addLog("已激活WakeLock - CPU将保持活动")
     }
 
     private fun releaseWakeLock() {
         wakeLock?.let {
             if (it.isHeld) it.release()
             wakeLock = null
-            addLog("Đã giải phóng WakeLock")
+            addLog("已释放WakeLock")
         }
     }
 
@@ -356,13 +356,13 @@ class AiServerService : Service() {
                 _isRunning.value = true
                 _activePort.value = port
                 updateNotification("Đang chạy trên cổng $port")
-                addLog("Máy chủ đã khởi động trên cổng :$port")
+                addLog("服务器已在端口 :$port")
                 return
             } catch (e: Exception) {
-                addLog("Cổng $port đang bận, thử cổng tiếp theo...")
+                addLog("端口 $port 忙,尝试下一个端口...")
             }
         }
-        addLog("Khởi động thất bại: tất cả cổng đều bận")
+        addLog("启动失败: 所有端口都忙")
         _isRunning.value = false
     }
 
@@ -371,7 +371,7 @@ class AiServerService : Service() {
         httpServer = null
         _isRunning.value = false
         _requestCount.value = 0
-        addLog("Máy chủ đã dừng")
+        addLog("服务器已停止")
     }
 
     private fun createNotificationChannel() {
@@ -454,7 +454,7 @@ class AiServerService : Service() {
                 }
                 corsResponse(response)
             } catch (e: Exception) {
-                addLog("Lỗi: ${e.message}")
+                addLog("错误: ${e.message}")
                 taskId?.let { failTask(it, e.message ?: "server error") }
                 corsResponse(newFixedLengthResponse(Response.Status.INTERNAL_ERROR, MIME_JSON,
                     """{"error":{"message":"${e.message?.replace("\"", "'")}","type":"server_error"}}"""))
@@ -480,10 +480,18 @@ class AiServerService : Service() {
                     """{"error":{"message":"Chưa tải mô hình. Hãy mở app Local AI Server và tải mô hình.","type":"server_error","code":"model_not_loaded"}}""")
             }
 
+            // Ensure UTF-8 encoding by modifying Content-Type before parseBody
+            val originalContentType = session.headers["content-type"]
+            if (originalContentType != null) {
+                val ct = NanoHTTPD.ContentType(originalContentType).tryUTF8()
+                session.headers["content-type"] = ct.contentTypeHeader
+            }
+
             val files = HashMap<String, String>()
             session.parseBody(files)
             val body = files["postData"] ?: ""
-            val json = JSONObject(body)
+            addLog("Body length: ${body.length} chars")
+            val json = JSONObject(body as String)
 
             // Parse messages array
             val messagesArr = json.optJSONArray("messages")
@@ -536,9 +544,9 @@ class AiServerService : Service() {
                 messages.add(LlmEngine.ChatMessage(role = role, content = textContent))
             }
 
-            val temperature = json.optDouble("temperature", engine.defaultTemperature.toDouble()).toFloat()
-            val topK = json.optInt("top_k", engine.defaultTopK)
-            val topP = json.optDouble("top_p", engine.defaultTopP.toDouble()).toFloat()
+            val temperature = if (json.has("temperature")) json.getDouble("temperature").toFloat() else engine.defaultTemperature.toFloat()
+            val topK = if (json.has("top_k")) json.getInt("top_k") else engine.defaultTopK
+            val topP = if (json.has("top_p")) json.getDouble("top_p").toFloat() else engine.defaultTopP.toFloat()
             val stream = json.optBoolean("stream", false)
             val modelName = engine.loadedModelName.value ?: "local-model"
             val hasMedia = lastMessageImages.isNotEmpty() || lastMessageAudios.isNotEmpty()
@@ -546,7 +554,7 @@ class AiServerService : Service() {
             _requestCount.update { it + 1 }
             val preview = messages.lastOrNull()?.content?.take(50) ?: ""
             val mediaInfo = if (hasMedia) " [img:${lastMessageImages.size} audio:${lastMessageAudios.size}]" else ""
-            addLog("Yêu cầu chat (${if (stream) "streaming" else "đồng bộ"})$mediaInfo - $preview...")
+            addLog("聊天请求 (${if (stream) "streaming" else "đồng bộ"})$mediaInfo - $preview...")
             taskId?.let { tid ->
                 updateTaskPreview(tid, preview + mediaInfo)
                 val params = mapOf(
@@ -583,7 +591,7 @@ class AiServerService : Service() {
                 val promptText = messages.lastOrNull()?.content ?: ""
                 val response = engine.generateMultimodal(promptText, lastMessageImages, lastMessageAudios, temperature, topK, topP)
                 val elapsed = System.currentTimeMillis() - startTime
-                addLog("Phản hồi trong ${elapsed}ms (${response.length} ký tự)")
+                addLog("响应耗时 ${elapsed}ms (${response.length} 字符)")
                 taskId?.let { completeTask(it, response.length.toLong(), response.take(100), response, 200) }
 
                 val chatId = "chatcmpl-${UUID.randomUUID().toString().take(12)}"
@@ -614,7 +622,7 @@ class AiServerService : Service() {
             val response = engine.generateFromMessages(messages, temperature, topK, topP)
             val elapsed = System.currentTimeMillis() - startTime
 
-            addLog("Phản hồi trong ${elapsed}ms (${response.length} ký tự)")
+            addLog("响应耗时 ${elapsed}ms (${response.length} 字符)")
             taskId?.let { completeTask(it, response.length.toLong(), response.take(100), response, 200) }
 
             val chatId = "chatcmpl-${UUID.randomUUID().toString().take(12)}"
@@ -699,7 +707,7 @@ class AiServerService : Service() {
                         onComplete = { fullText ->
                             try {
                                 val elapsed = System.currentTimeMillis() - startTime
-                                addLog("Hoàn thành stream trong ${elapsed}ms (${fullText.length} ký tự)")
+                                addLog("Stream完成耗时 ${elapsed}ms (${fullText.length} 字符)")
                                 taskId?.let { completeTask(it, fullText.length.toLong(), fullText.take(100), fullText, 200) }
 
                                 val doneChunk = JSONObject().apply {
@@ -721,7 +729,7 @@ class AiServerService : Service() {
                         },
                         onError = { e ->
                             try {
-                                addLog("Lỗi stream: ${e.message}")
+                                addLog("Stream错误: ${e.message}")
                                 taskId?.let { failTask(it, e.message ?: "stream error") }
                                 val errorJson = JSONObject().apply {
                                     put("error", JSONObject().apply {
@@ -875,7 +883,7 @@ class AiServerService : Service() {
             }
 
             _requestCount.update { it + 1 }
-            addLog("Process-file: $fileName (${fileBytes.size / 1024}KB, task=$task)")
+            addLog("处理文件: $fileName (${fileBytes.size / 1024}KB, task=$task)")
             taskId?.let { tid ->
                 updateTaskPreview(tid, "$task: $fileName (${fileBytes.size / 1024}KB)")
                 setTaskRequestBody(tid, "file=$fileName\ntask=$task\nlanguage=$language", mapOf(
@@ -912,14 +920,14 @@ class AiServerService : Service() {
                     } else fileBytes
                 } catch (oom: OutOfMemoryError) {
                     System.gc()
-                    addLog("OOM khi decode ảnh")
+                    addLog("解码图像时内存不足")
                     taskId?.let { failTask(it, "OOM decoding image", 413) }
                     return newFixedLengthResponse(Response.Status.PAYLOAD_TOO_LARGE, MIME_JSON,
                         """{"error":"Ảnh quá lớn"}""")
                 } catch (_: Exception) { fileBytes }
             } else fileBytes
 
-            addLog("Image: ${fileBytes.size / 1024}KB → ${processedBytes.size / 1024}KB (PNG 768px)")
+            addLog("图像: ${fileBytes.size / 1024}KB → ${processedBytes.size / 1024}KB (PNG 768px)")
 
             return try {
                 val startTime = System.currentTimeMillis()
@@ -929,7 +937,7 @@ class AiServerService : Service() {
                     engine.generateResponse(prompt)
                 }
                 val elapsed = System.currentTimeMillis() - startTime
-                addLog("Process-file done ${elapsed}ms (${text.length} chars)")
+                addLog("文件处理完成 ${elapsed}ms (${text.length} chars)")
                 taskId?.let { completeTask(it, text.length.toLong(), text.take(100), text, 200) }
 
                 newFixedLengthResponse(Response.Status.OK, MIME_JSON,
@@ -942,7 +950,7 @@ class AiServerService : Service() {
                         put("processing_time_ms", elapsed)
                     }.toString())
             } catch (e: Throwable) {
-                addLog("Lỗi process-file: ${e.javaClass.simpleName}: ${e.message}")
+                addLog("处理文件错误: ${e.javaClass.simpleName}: ${e.message}")
                 taskId?.let { failTask(it, "${e.javaClass.simpleName}: ${e.message}") }
                 // Force GC to free memory after error
                 System.gc()
@@ -958,24 +966,31 @@ class AiServerService : Service() {
                     """{"error":"Chưa tải mô hình. Hãy mở app Local AI Server và tải mô hình."}""")
             }
 
+            // Ensure UTF-8 encoding by modifying Content-Type before parseBody
+            val originalContentType = session.headers["content-type"]
+            if (originalContentType != null) {
+                val ct = NanoHTTPD.ContentType(originalContentType).tryUTF8()
+                session.headers["content-type"] = ct.contentTypeHeader
+            }
+
             val files = HashMap<String, String>()
             session.parseBody(files)
             val body = files["postData"] ?: ""
             val json = JSONObject(body)
 
-            val prompt = json.optString("prompt", "")
+            val prompt = if (json.has("prompt")) json.getString("prompt") else ""
             if (prompt.isBlank()) {
                 taskId?.let { failTask(it, "prompt required", 400) }
                 return newFixedLengthResponse(Response.Status.BAD_REQUEST, MIME_JSON,
                     """{"error":"prompt is required"}""")
             }
 
-            val temperature = json.optDouble("temperature", 0.7).toFloat()
-            val topK = json.optInt("top_k", 64)
-            val topP = json.optDouble("top_p", 0.95).toFloat()
+            val temperature = if (json.has("temperature")) json.getDouble("temperature").toFloat() else 0.7f
+            val topK = if (json.has("top_k")) json.getInt("top_k") else 64
+            val topP = if (json.has("top_p")) json.getDouble("top_p").toFloat() else 0.95f
 
             _requestCount.update { it + 1 }
-            addLog("Yêu cầu chat (${prompt.take(50)}...)")
+            addLog("聊天请求 (${prompt.take(50)}...)")
             taskId?.let { tid ->
                 updateTaskPreview(tid, prompt.take(80))
                 setTaskRequestBody(tid, body, mapOf(
@@ -990,7 +1005,7 @@ class AiServerService : Service() {
             val response = engine.generateResponse(prompt, temperature, topK, topP)
             val elapsed = System.currentTimeMillis() - startTime
 
-            addLog("Phản hồi trong ${elapsed}ms (${response.length} ký tự)")
+            addLog("响应耗时 ${elapsed}ms (${response.length} 字符)")
             taskId?.let { completeTask(it, response.length.toLong(), response.take(100), response, 200) }
 
             val result = JSONObject().apply {
@@ -1008,6 +1023,13 @@ class AiServerService : Service() {
          * NanoHTTPD writes uploaded files to temp paths stored in the files map.
          */
         private fun readUploadedFile(session: IHTTPSession, vararg fieldNames: String): Pair<ByteArray, String>? {
+            // Ensure UTF-8 encoding by modifying Content-Type before parseBody
+            val originalContentType = session.headers["content-type"]
+            if (originalContentType != null) {
+                val ct = NanoHTTPD.ContentType(originalContentType).tryUTF8()
+                session.headers["content-type"] = ct.contentTypeHeader
+            }
+
             val files = HashMap<String, String>()
             try { session.parseBody(files) } catch (_: Exception) { return null }
             for (name in fieldNames) {
@@ -1064,7 +1086,7 @@ class AiServerService : Service() {
             val prompt = if (userPrompt.isNotBlank()) "$instruction\n\nContext: $userPrompt" else instruction
 
             _requestCount.update { it + 1 }
-            addLog("Audio transcription: $fileName (${audioBytes.size / 1024} KB)${if (translate) " → EN" else ""}")
+            addLog("音频转录: $fileName (${audioBytes.size / 1024} KB)${if (translate) " → EN" else ""}")
             taskId?.let { tid ->
                 updateTaskPreview(tid, "$fileName (${audioBytes.size / 1024}KB)${if (translate) " → EN" else ""}")
                 setTaskRequestBody(tid, "file=$fileName (${audioBytes.size} bytes)", mapOf(
@@ -1082,7 +1104,7 @@ class AiServerService : Service() {
                 val startTime = System.currentTimeMillis()
                 val text = engine.generateMultimodal(prompt, emptyList(), listOf(audioBytes))
                 val elapsed = System.currentTimeMillis() - startTime
-                addLog("Transcription xong ${elapsed}ms (${text.length} ký tự)")
+                addLog("转录完成 ${elapsed}ms (${text.length} 字符)")
                 taskId?.let { completeTask(it, text.length.toLong(), text.take(100), text, 200) }
 
                 when (responseFormat) {
@@ -1099,7 +1121,7 @@ class AiServerService : Service() {
                         """{"text":${JSONObject.quote(text)}}""")
                 }
             } catch (e: Exception) {
-                addLog("Lỗi transcription: ${e.message}")
+                addLog("转录错误: ${e.message}")
                 taskId?.let { failTask(it, e.message ?: "transcription failed") }
                 newFixedLengthResponse(Response.Status.INTERNAL_ERROR, MIME_JSON,
                     """{"error":{"message":"${e.message?.replace("\"","'")}","type":"server_error"}}""")
@@ -1123,7 +1145,7 @@ class AiServerService : Service() {
                 else "Mô tả chi tiết ảnh này. Liệt kê các đối tượng, con người, bối cảnh, màu sắc, và hành động nếu có."
 
             _requestCount.update { it + 1 }
-            addLog("Image describe: $fileName (${imageBytes.size / 1024} KB)")
+            addLog("图像描述: $fileName (${imageBytes.size / 1024} KB)")
             taskId?.let { tid ->
                 updateTaskPreview(tid, "$fileName (${imageBytes.size / 1024}KB)")
                 setTaskRequestBody(tid, "file=$fileName (${imageBytes.size} bytes)\nprompt=$prompt", mapOf(
@@ -1138,7 +1160,7 @@ class AiServerService : Service() {
                 val startTime = System.currentTimeMillis()
                 val text = engine.generateMultimodal(prompt, listOf(imageBytes), emptyList())
                 val elapsed = System.currentTimeMillis() - startTime
-                addLog("Describe xong ${elapsed}ms (${text.length} ký tự)")
+                addLog("描述完成 ${elapsed}ms (${text.length} 字符)")
                 taskId?.let { completeTask(it, text.length.toLong(), text.take(100), text, 200) }
 
                 newFixedLengthResponse(Response.Status.OK, MIME_JSON,
@@ -1148,7 +1170,7 @@ class AiServerService : Service() {
                         put("processing_time_ms", elapsed)
                     }.toString())
             } catch (e: Exception) {
-                addLog("Lỗi image describe: ${e.message}")
+                addLog("图像描述错误: ${e.message}")
                 taskId?.let { failTask(it, e.message ?: "describe failed") }
                 newFixedLengthResponse(Response.Status.INTERNAL_ERROR, MIME_JSON,
                     """{"error":{"message":"${e.message?.replace("\"","'")}","type":"server_error"}}""")
@@ -1158,6 +1180,13 @@ class AiServerService : Service() {
         /** POST /v1/video/analyze - extract frames + analyze */
         private fun handleVideoAnalyze(session: IHTTPSession, taskId: String? = null): Response {
             requireMultimodal(taskId)?.let { return it }
+
+            // Ensure UTF-8 encoding by modifying Content-Type before parseBody
+            val originalContentType = session.headers["content-type"]
+            if (originalContentType != null) {
+                val ct = NanoHTTPD.ContentType(originalContentType).tryUTF8()
+                session.headers["content-type"] = ct.contentTypeHeader
+            }
 
             val files = HashMap<String, String>()
             try { session.parseBody(files) } catch (_: Exception) {
@@ -1176,7 +1205,7 @@ class AiServerService : Service() {
                 else "Mô tả nội dung video này dựa trên các khung hình đã trích xuất. Tóm tắt sự việc, đối tượng và diễn biến."
 
             _requestCount.update { it + 1 }
-            addLog("Video analyze: $fileName (frames=$frameCount)")
+            addLog("视频分析: $fileName (frames=$frameCount)")
             taskId?.let { tid ->
                 updateTaskPreview(tid, "$fileName (frames=$frameCount)")
                 setTaskRequestBody(tid, "file=$fileName\nframe_count=$frameCount\nprompt=$prompt", mapOf(
@@ -1212,7 +1241,7 @@ class AiServerService : Service() {
                     }
                 }
             } catch (e: Exception) {
-                addLog("Lỗi trích xuất frame: ${e.message}")
+                addLog("提取帧错误: ${e.message}")
                 return newFixedLengthResponse(Response.Status.INTERNAL_ERROR, MIME_JSON,
                     """{"error":{"message":"Không thể đọc video: ${e.message?.replace("\"","'")}","type":"server_error"}}""")
             } finally {
@@ -1230,7 +1259,7 @@ class AiServerService : Service() {
                 val startTime = System.currentTimeMillis()
                 val text = engine.generateMultimodal(prompt, frames, emptyList())
                 val elapsed = System.currentTimeMillis() - startTime
-                addLog("Video analyze xong ${elapsed}ms (${frames.size} frames, ${text.length} ký tự)")
+                addLog("视频分析完成 ${elapsed}ms (${frames.size} frames, ${text.length} 字符)")
                 taskId?.let { completeTask(it, text.length.toLong(), text.take(100), text, 200) }
 
                 newFixedLengthResponse(Response.Status.OK, MIME_JSON,
@@ -1242,7 +1271,7 @@ class AiServerService : Service() {
                         put("processing_time_ms", elapsed)
                     }.toString())
             } catch (e: Exception) {
-                addLog("Lỗi video analyze: ${e.message}")
+                addLog("视频分析错误: ${e.message}")
                 taskId?.let { failTask(it, e.message ?: "video analyze failed") }
                 newFixedLengthResponse(Response.Status.INTERNAL_ERROR, MIME_JSON,
                     """{"error":{"message":"${e.message?.replace("\"","'")}","type":"server_error"}}""")
@@ -1340,7 +1369,7 @@ class AiServerService : Service() {
                         onComplete = { fullText ->
                             try {
                                 val elapsed = System.currentTimeMillis() - startTime
-                                addLog("Stream đa phương tiện hoàn thành ${elapsed}ms (${fullText.length} ký tự)")
+                                addLog("多模态Stream完成 ${elapsed}ms (${fullText.length} 字符)")
                                 taskId?.let { completeTask(it, fullText.length.toLong(), fullText.take(100), fullText, 200) }
                                 val doneChunk = JSONObject().apply {
                                     put("id", chatId); put("object", "chat.completion.chunk")
@@ -1357,7 +1386,7 @@ class AiServerService : Service() {
                         },
                         onError = { e ->
                             try {
-                                addLog("Lỗi stream đa phương tiện: ${e.message}")
+                                addLog("多模态stream错误: ${e.message}")
                                 taskId?.let { failTask(it, e.message ?: "stream error") }
                                 val errorJson = JSONObject().apply {
                                     put("error", JSONObject().apply {
